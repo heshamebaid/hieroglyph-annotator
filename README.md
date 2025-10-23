@@ -54,4 +54,69 @@ cd hieroglyph-annotator
 
 ## 📖 Usage
 
-### GUI Versio
+### GUI Version (Recommended)
+```bash
+python hieroglyph_annotator_gui.py
+```
+
+**Controls:**
+- **Mouse**: Click and drag to draw bounding boxes
+- **Mouse Wheel**: Zoom in/out
+- **Search Box**: Filter Gardiner categories
+- **Category List**: Click to select classification
+- **Save Button**: Save all boxes to selected category
+
+**Keyboard Shortcuts:**
+- `N` - Next image
+- `P` - Previous image
+- `R` - Reset view
+- `C` - Clear boxes
+- `S` - Save current symbol
+
+### Command-Line Version
+```bash
+python hieroglyph_annotator.py
+```
+
+**Controls:**
+- **Left-drag**: Draw bounding box
+- **Ctrl+drag**: Pan view
+- **Mouse wheel**: Zoom in/out
+- **n**: Next image
+- **r**: Reset boxes
+- **q**: Skip image
+
+## 🏷️ Gardiner Classification
+
+The tool uses Gardiner's sign list, the standard classification system for Egyptian hieroglyphs:
+
+| Category | Description |
+|----------|-------------|
+| A | Man and his occupations |
+| B | Woman and her occupations |
+| C | Anthropomorphic deities |
+| D | Parts of the human body |
+| E | Mammals |
+| F | Parts of mammals |
+| G | Birds |
+| H | Parts of birds |
+| I | Amphibious animals, reptiles, etc. |
+| K | Fish and parts of fish |
+| L | Invertebrates and lesser animals |
+| M | Trees and plants |
+| N | Sky, earth, water |
+| O | Buildings, parts of buildings, etc. |
+| P | Ships and parts of ships |
+| Q | Domestic and funerary furniture |
+| R | Temple furniture and sacred emblems |
+| S | Crowns, dress, staves, etc. |
+| T | Warfare, hunting, butchery |
+| U | Agriculture, crafts, and professions |
+| V | Rope, fiber, baskets, bags, etc. |
+| W | Vessels of stone and earthenware |
+| X | Vessels of glass and similar materials |
+| Y | Writing, games, music |
+| Z | Strokes, geometrical figures, etc. |
+| Aa | Unclassified signs |
+
+## 📁 File Structure
