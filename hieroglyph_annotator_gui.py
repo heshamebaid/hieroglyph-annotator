@@ -78,6 +78,12 @@ class HieroglyphAnnotatorGUI:
         self.start_y = 0
         self.current_box = None
         
+        # Display transformation tracking
+        self.display_scale_x = 1.0
+        self.display_scale_y = 1.0
+        self.display_x1 = 0
+        self.display_y1 = 0
+        
         self.setup_gui()
         self.load_images()
         
@@ -171,6 +177,7 @@ class HieroglyphAnnotatorGUI:
         action_frame = ttk.LabelFrame(right_frame, text="⚡ Actions", padding=10)
         action_frame.pack(fill=tk.X, pady=(0, 10))
         
+        ttk.Button(action_frame, text="👁️ Preview Boxes", command=self.preview_boxes).pack(fill=tk.X, pady=(0, 5))
         ttk.Button(action_frame, text="💾 Save Symbol", command=self.save_current_symbol).pack(fill=tk.X, pady=(0, 5))
         ttk.Button(action_frame, text="➡️ Next Image", command=self.next_image).pack(fill=tk.X, pady=(0, 5))
         ttk.Button(action_frame, text="⬅️ Previous Image", command=self.previous_image).pack(fill=tk.X, pady=(0, 5))
@@ -180,6 +187,8 @@ class HieroglyphAnnotatorGUI:
         self.image_canvas.bind("<Button-1>", self.on_canvas_click)
         self.image_canvas.bind("<B1-Motion>", self.on_canvas_drag)
         self.image_canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
+        self.image_canvas.bind("<Button-3>", self.start_pan)  # Right-click
+        self.image_canvas.bind("<B3-Motion>", self.do_pan)   # Right-drag
         self.image_canvas.bind("<MouseWheel>", self.on_canvas_scroll)
         self.image_canvas.bind("<Button-4>", self.on_canvas_scroll)  # Linux
         self.image_canvas.bind("<Button-5>", self.on_canvas_scroll)  # Linux
@@ -268,41 +277,60 @@ class HieroglyphAnnotatorGUI:
         """Display the current image on canvas"""
         if self.current_image is None:
             return
-            
-        # Calculate display area
+
         canvas_width = self.image_canvas.winfo_width()
         canvas_height = self.image_canvas.winfo_height()
-        
+
         if canvas_width <= 1 or canvas_height <= 1:
-            # Canvas not ready, schedule for later
             self.root.after(100, self.display_image)
             return
-        
-        # Apply zoom and offset
+
         h, w = self.current_image.shape[:2]
-        center_x = int(self.offset_x + w / (2 * self.zoom))
-        center_y = int(self.offset_y + h / (2 * self.zoom))
-        zoom_w, zoom_h = int(w / self.zoom), int(h / self.zoom)
-        
-        x1 = max(center_x - zoom_w // 2, 0)
-        y1 = max(center_y - zoom_h // 2, 0)
-        x2 = min(center_x + zoom_w // 2, w)
-        y2 = min(center_y + zoom_h // 2, h)
-        
-        # Crop and resize
-        cropped = self.current_image[y1:y2, x1:x2]
-        display_img = Image.fromarray(cropped)
-        display_img = display_img.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
-        
-        # Convert to PhotoImage
+
+        # Compute scaled dimensions
+        scaled_w = int(w * self.zoom)
+        scaled_h = int(h * self.zoom)
+
+        # Resize the image for display
+        resized_img = cv2.resize(self.current_image, (scaled_w, scaled_h), interpolation=cv2.INTER_LINEAR)
+
+        # Determine the visible region (for panning)
+        x1 = max(0, self.offset_x)
+        y1 = max(0, self.offset_y)
+        x2 = min(x1 + canvas_width, scaled_w)
+        y2 = min(y1 + canvas_height, scaled_h)
+
+        # Crop the visible region
+        visible = resized_img[y1:y2, x1:x2]
+
+        # Convert to ImageTk
+        display_img = Image.fromarray(visible)
         self.photo = ImageTk.PhotoImage(display_img)
-        
-        # Clear canvas and display image
         self.image_canvas.delete("all")
         self.image_canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
-        
-        # Draw bounding boxes
+
+        # Store transformation data for coordinate conversion
+        self.display_scale_x = scaled_w / w
+        self.display_scale_y = scaled_h / h
+        self.display_x1 = x1
+        self.display_y1 = y1
+
         self.draw_boxes()
+    
+    def start_pan(self, event):
+        """Start panning with right-click"""
+        self.pan_start_x = event.x
+        self.pan_start_y = event.y
+    
+    def do_pan(self, event):
+        """Pan the image with right-drag"""
+        dx = event.x - self.pan_start_x
+        dy = event.y - self.pan_start_y
+        self.offset_x = max(0, self.offset_x - dx)
+        self.offset_y = max(0, self.offset_y - dy)
+        self.pan_start_x = event.x
+        self.pan_start_y = event.y
+        self.display_image()
     
     def draw_boxes(self):
         """Draw all bounding boxes on the canvas"""
@@ -356,24 +384,40 @@ class HieroglyphAnnotatorGUI:
         """Handle canvas release"""
         if self.drawing:
             self.drawing = False
-            
-            # Clear temporary box
             self.image_canvas.delete("temp_box")
-            
-            # Convert canvas coordinates to image coordinates
-            img_x1 = int(self.start_x / self.zoom + self.offset_x)
-            img_y1 = int(self.start_y / self.zoom + self.offset_y)
-            img_x2 = int(event.x / self.zoom + self.offset_x)
-            img_y2 = int(event.y / self.zoom + self.offset_y)
-            
-            # Ensure valid coordinates
-            x1, y1 = min(img_x1, img_x2), min(img_y1, img_y2)
-            x2, y2 = max(img_x1, img_x2), max(img_y1, img_y2)
-            
-            # Add box if it has reasonable size
-            if abs(x2 - x1) > 10 and abs(y2 - y1) > 10:
-                self.boxes.append((x1, y1, x2 - x1, y2 - y1))
+
+            if self.current_image is None:
+                return
+
+            # Convert canvas coordinates → scaled image coordinates
+            x1 = min(self.start_x, event.x)
+            y1 = min(self.start_y, event.y)
+            x2 = max(self.start_x, event.x)
+            y2 = max(self.start_y, event.y)
+
+            # Adjust for panning (offset_x, offset_y are in scaled image space)
+            img_x1_scaled = self.display_x1 + x1
+            img_y1_scaled = self.display_y1 + y1
+            img_x2_scaled = self.display_x1 + x2
+            img_y2_scaled = self.display_y1 + y2
+
+            # Map back to original image coordinates
+            img_x1 = int(img_x1_scaled / self.display_scale_x)
+            img_y1 = int(img_y1_scaled / self.display_scale_y)
+            img_x2 = int(img_x2_scaled / self.display_scale_x)
+            img_y2 = int(img_y2_scaled / self.display_scale_y)
+
+            # Clip to image bounds
+            h, w = self.current_image.shape[:2]
+            img_x1 = max(0, min(w, img_x1))
+            img_y1 = max(0, min(h, img_y1))
+            img_x2 = max(0, min(w, img_x2))
+            img_y2 = max(0, min(h, img_y2))
+
+            if abs(img_x2 - img_x1) > 10 and abs(img_y2 - img_y1) > 10:
+                self.boxes.append((img_x1, img_y1, img_x2 - img_x1, img_y2 - img_y1))
                 self.display_image()
+                print(f"Added box: ({img_x1},{img_y1}) to ({img_x2},{img_y2})")
     
     def on_canvas_scroll(self, event):
         """Handle canvas scroll for zooming"""
@@ -447,10 +491,21 @@ class HieroglyphAnnotatorGUI:
         # Save all boxes
         saved_count = 0
         for i, (x, y, w, h) in enumerate(self.boxes):
-            # Extract symbol
-            symbol_crop = self.current_image[y:y+h, x:x+w]
+            # Ensure coordinates are within image bounds
+            img_h, img_w = self.current_image.shape[:2]
+            x1 = max(0, min(x, img_w))
+            y1 = max(0, min(y, img_h))
+            x2 = max(0, min(x + w, img_w))
+            y2 = max(0, min(y + h, img_h))
             
-            # Resize to standard size
+            # Skip if box is invalid
+            if x2 <= x1 or y2 <= y1:
+                continue
+                
+            # Extract symbol from original image
+            symbol_crop = self.current_image[y1:y2, x1:x2]
+            
+            # Convert to PIL Image and resize to standard size
             symbol_img = Image.fromarray(symbol_crop)
             symbol_img = symbol_img.resize(self.SAVE_SIZE, Image.Resampling.LANCZOS)
             
@@ -458,10 +513,72 @@ class HieroglyphAnnotatorGUI:
             filename = f"{os.path.splitext(self.image_files[self.current_image_index])[0]}_symbol_{i:03d}.png"
             save_path = os.path.join(self.OUTPUT_DIR, category_code, filename)
             symbol_img.save(save_path)
+            print(f"Saved Box {i+1}: ({x1},{y1}) to ({x2},{y2}) - Size: {x2-x1}x{y2-y1} -> {save_path}")  # Debug
             saved_count += 1
         
         messagebox.showinfo("Success", f"Saved {saved_count} symbol(s) to category '{selected_category}'")
         self.clear_boxes()
+    
+    def preview_boxes(self):
+        """Preview what will be saved from each bounding box"""
+        if not self.boxes:
+            messagebox.showwarning("Warning", "No bounding boxes to preview!")
+            return
+        
+        # Create preview window
+        preview_window = tk.Toplevel(self.root)
+        preview_window.title("📋 Box Preview")
+        preview_window.geometry("800x600")
+        
+        # Create scrollable frame
+        canvas = tk.Canvas(preview_window)
+        scrollbar = ttk.Scrollbar(preview_window, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Show each box
+        for i, (x, y, w, h) in enumerate(self.boxes):
+            # Ensure coordinates are within image bounds
+            img_h, img_w = self.current_image.shape[:2]
+            x1 = max(0, min(x, img_w))
+            y1 = max(0, min(y, img_h))
+            x2 = max(0, min(x + w, img_w))
+            y2 = max(0, min(y + h, img_h))
+            
+            if x2 <= x1 or y2 <= y1:
+                continue
+                
+            # Extract symbol
+            symbol_crop = self.current_image[y1:y2, x1:x2]
+            symbol_img = Image.fromarray(symbol_crop)
+            
+            # Resize for preview (max 200px)
+            max_size = 200
+            symbol_img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+            
+            # Convert to PhotoImage
+            photo = ImageTk.PhotoImage(symbol_img)
+            
+            # Create frame for this preview
+            box_frame = ttk.Frame(scrollable_frame)
+            box_frame.pack(fill=tk.X, padx=10, pady=5)
+            
+            # Label and image
+            ttk.Label(box_frame, text=f"Box {i+1}: ({x1},{y1}) to ({x2},{y2}) - Size: {x2-x1}x{y2-y1}").pack(anchor=tk.W)
+            print(f"Preview Box {i+1}: Original coords ({x},{y},{w},{h}) -> Final coords ({x1},{y1}) to ({x2},{y2})")  # Debug
+            img_label = ttk.Label(box_frame, image=photo)
+            img_label.image = photo  # Keep a reference
+            img_label.pack(anchor=tk.W)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
     
     def next_image(self):
         """Go to next image"""
@@ -493,3 +610,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
