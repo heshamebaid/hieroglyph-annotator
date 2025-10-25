@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 import threading
 
 class HieroglyphAnnotatorGUI:
@@ -965,43 +965,68 @@ Free Shape Mode:
             print(f"Saved Box {i+1}: ({x1},{y1}) to ({x2},{y2}) - Size: {x2-x1}x{y2-y1} -> {save_path}")
             saved_count += 1
         
-        # Save polygons
+        # Save polygons as actual selected areas
         for i, polygon in enumerate(self.polygons):
             if len(polygon) > 2:
-                # Get bounding box of the polygon
-                x_coords = [point[0] for point in polygon]
-                y_coords = [point[1] for point in polygon]
+                # Convert canvas coordinates to image coordinates
+                img_polygon = []
+                for point in polygon:
+                    img_x = int((point[0] + self.offset_x) / self.zoom)
+                    img_y = int((point[1] + self.offset_y) / self.zoom)
+                    img_polygon.append((img_x, img_y))
+                
+                # Get bounding box for the crop area
+                x_coords = [point[0] for point in img_polygon]
+                y_coords = [point[1] for point in img_polygon]
                 min_x = min(x_coords)
                 max_x = max(x_coords)
                 min_y = min(y_coords)
                 max_y = max(y_coords)
                 
-                # Convert canvas coordinates to image coordinates
-                img_min_x = int((min_x + self.offset_x) / self.zoom)
-                img_min_y = int((min_y + self.offset_y) / self.zoom)
-                img_max_x = int((max_x + self.offset_x) / self.zoom)
-                img_max_y = int((max_y + self.offset_y) / self.zoom)
-                
                 # Clip to image bounds
                 h, w = self.current_image.shape[:2]
-                img_min_x = max(0, min(w, img_min_x))
-                img_min_y = max(0, min(h, img_min_y))
-                img_max_x = max(0, min(w, img_max_x))
-                img_max_y = max(0, min(h, img_max_y))
+                min_x = max(0, min(w, min_x))
+                min_y = max(0, min(h, min_y))
+                max_x = max(0, min(w, max_x))
+                max_y = max(0, min(h, max_y))
                 
-                if img_max_x > img_min_x and img_max_y > img_min_y:
-                    # Extract the region from the original image
-                    symbol_crop = self.current_image[img_min_y:img_max_y, img_min_x:img_max_x]
+                if max_x > min_x and max_y > min_y:
+                    # Create a mask for the polygon
+                    mask = Image.new('L', (w, h), 0)
+                    mask_draw = ImageDraw.Draw(mask)
                     
-                    # Convert to PIL Image and resize to standard size
+                    # Draw the polygon on the mask
+                    mask_draw.polygon(img_polygon, fill=255)
+                    
+                    # Crop the mask to the bounding box
+                    mask_crop = mask.crop((min_x, min_y, max_x, max_y))
+                    
+                    # Crop the image to the bounding box
+                    symbol_crop = self.current_image[min_y:max_y, min_x:max_x]
                     symbol_img = Image.fromarray(symbol_crop)
-                    symbol_img = symbol_img.resize(self.SAVE_SIZE, Image.Resampling.LANCZOS)
+                    
+                    # Apply the mask to get only the polygon area
+                    # Create a transparent background
+                    result_img = Image.new('RGBA', symbol_img.size, (0, 0, 0, 0))
+                    
+                    # Convert the original image to RGBA if needed
+                    if symbol_img.mode != 'RGBA':
+                        symbol_img = symbol_img.convert('RGBA')
+                    
+                    # Apply the mask
+                    for y in range(symbol_img.height):
+                        for x in range(symbol_img.width):
+                            if mask_crop.getpixel((x, y)) > 0:  # If pixel is inside polygon
+                                result_img.putpixel((x, y), symbol_img.getpixel((x, y)))
+                    
+                    # Resize to standard size
+                    result_img = result_img.resize(self.SAVE_SIZE, Image.Resampling.LANCZOS)
                     
                     # Save
                     filename = f"{os.path.splitext(self.image_files[self.current_image_index])[0]}_polygon_{i:03d}.png"
                     save_path = os.path.join(self.OUTPUT_DIR, category_code, filename)
-                    symbol_img.save(save_path)
-                    print(f"Saved Polygon {i+1}: ({img_min_x},{img_min_y}) to ({img_max_x},{img_max_y}) - Size: {img_max_x-img_min_x}x{img_max_y-img_min_y} -> {save_path}")
+                    result_img.save(save_path)
+                    print(f"Saved Polygon {i+1}: Actual polygon shape ({min_x},{min_y}) to ({max_x},{max_y}) - Size: {max_x-min_x}x{max_y-min_y} -> {save_path}")
                     saved_count += 1
         
         if saved_count > 0:
@@ -1068,48 +1093,73 @@ Free Shape Mode:
             img_label.image = photo  # Keep a reference
             img_label.pack(anchor=tk.W)
         
-        # Show each polygon
+        # Show each polygon as actual selected area
         for i, polygon in enumerate(self.polygons):
             if len(polygon) > 2:
-                # Get bounding box of the polygon
-                x_coords = [point[0] for point in polygon]
-                y_coords = [point[1] for point in polygon]
+                # Convert canvas coordinates to image coordinates
+                img_polygon = []
+                for point in polygon:
+                    img_x = int((point[0] + self.offset_x) / self.zoom)
+                    img_y = int((point[1] + self.offset_y) / self.zoom)
+                    img_polygon.append((img_x, img_y))
+                
+                # Get bounding box for the crop area
+                x_coords = [point[0] for point in img_polygon]
+                y_coords = [point[1] for point in img_polygon]
                 min_x = min(x_coords)
                 max_x = max(x_coords)
                 min_y = min(y_coords)
                 max_y = max(y_coords)
                 
-                # Convert canvas coordinates to image coordinates
-                img_min_x = int((min_x + self.offset_x) / self.zoom)
-                img_min_y = int((min_y + self.offset_y) / self.zoom)
-                img_max_x = int((max_x + self.offset_x) / self.zoom)
-                img_max_y = int((max_y + self.offset_y) / self.zoom)
-                
                 # Clip to image bounds
                 h, w = self.current_image.shape[:2]
-                img_min_x = max(0, min(w, img_min_x))
-                img_min_y = max(0, min(h, img_min_y))
-                img_max_x = max(0, min(w, img_max_x))
-                img_max_y = max(0, min(h, img_max_y))
+                min_x = max(0, min(w, min_x))
+                min_y = max(0, min(h, min_y))
+                max_x = max(0, min(w, max_x))
+                max_y = max(0, min(h, max_y))
                 
-                if img_max_x > img_min_x and img_max_y > img_min_y:
-                    # Extract symbol
-                    symbol_crop = self.current_image[img_min_y:img_max_y, img_min_x:img_max_x]
+                if max_x > min_x and max_y > min_y:
+                    # Create a mask for the polygon
+                    mask = Image.new('L', (w, h), 0)
+                    mask_draw = ImageDraw.Draw(mask)
+                    
+                    # Draw the polygon on the mask
+                    mask_draw.polygon(img_polygon, fill=255)
+                    
+                    # Crop the mask to the bounding box
+                    mask_crop = mask.crop((min_x, min_y, max_x, max_y))
+                    
+                    # Crop the image to the bounding box
+                    symbol_crop = self.current_image[min_y:max_y, min_x:max_x]
                     symbol_img = Image.fromarray(symbol_crop)
+                    
+                    # Apply the mask to get only the polygon area
+                    # Create a transparent background
+                    result_img = Image.new('RGBA', symbol_img.size, (0, 0, 0, 0))
+                    
+                    # Convert the original image to RGBA if needed
+                    if symbol_img.mode != 'RGBA':
+                        symbol_img = symbol_img.convert('RGBA')
+                    
+                    # Apply the mask
+                    for y in range(symbol_img.height):
+                        for x in range(symbol_img.width):
+                            if mask_crop.getpixel((x, y)) > 0:  # If pixel is inside polygon
+                                result_img.putpixel((x, y), symbol_img.getpixel((x, y)))
                     
                     # Resize for preview (max 200px)
                     max_size = 200
-                    symbol_img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                    result_img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
                     
                     # Convert to PhotoImage
-                    photo = ImageTk.PhotoImage(symbol_img)
+                    photo = ImageTk.PhotoImage(result_img)
                     
                     # Create frame for this preview
                     poly_frame = ttk.Frame(scrollable_frame)
                     poly_frame.pack(fill=tk.X, padx=10, pady=5)
                     
                     # Label and image
-                    ttk.Label(poly_frame, text=f"Polygon {i+1}: ({img_min_x},{img_min_y}) to ({img_max_x},{img_max_y}) - Size: {img_max_x-img_min_x}x{img_max_y-img_min_y} - Points: {len(polygon)}").pack(anchor=tk.W)
+                    ttk.Label(poly_frame, text=f"Polygon {i+1}: Actual selected shape ({min_x},{min_y}) to ({max_x},{max_y}) - Size: {max_x-min_x}x{max_y-min_y} - Points: {len(polygon)}").pack(anchor=tk.W)
                     img_label = ttk.Label(poly_frame, image=photo)
                     img_label.image = photo  # Keep a reference
                     img_label.pack(anchor=tk.W)
