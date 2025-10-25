@@ -297,6 +297,11 @@ class HieroglyphAnnotatorGUI:
         self.start_y = 0
         self.current_box = None
         
+        # Free shape variables
+        self.free_shape_mode = False
+        self.polygon_points = []
+        self.polygons = []  # Store completed polygons
+        
         # Display transformation tracking
         self.display_scale_x = 1.0
         self.display_scale_y = 1.0
@@ -340,6 +345,10 @@ class HieroglyphAnnotatorGUI:
         ttk.Button(controls_frame, text="🔍 Zoom Out", command=self.zoom_out).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(controls_frame, text="🔄 Reset View", command=self.reset_view).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(controls_frame, text="🗑️ Clear Boxes", command=self.clear_boxes).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Free shape mode toggle
+        self.free_shape_button = ttk.Button(controls_frame, text="🔷 Free Shape", command=self.toggle_free_shape)
+        self.free_shape_button.pack(side=tk.LEFT, padx=(10, 5))
         
         # Panning controls
         pan_frame = ttk.Frame(controls_frame)
@@ -431,7 +440,12 @@ class HieroglyphAnnotatorGUI:
 • +/-: Zoom in/out
 • R: Reset view
 • C: Clear boxes
-• S: Save symbol"""
+• S: Save symbol
+
+Free Shape Mode:
+• F: Toggle free shape mode
+• Left-click: Add polygon points
+• Right-click: Complete polygon"""
         
         ttk.Label(shortcuts_frame, text=shortcuts_text, font=('Arial', 9), justify=tk.LEFT).pack(anchor=tk.W)
         
@@ -439,7 +453,7 @@ class HieroglyphAnnotatorGUI:
         self.image_canvas.bind("<Button-1>", self.on_canvas_click)
         self.image_canvas.bind("<B1-Motion>", self.on_canvas_drag)
         self.image_canvas.bind("<ButtonRelease-1>", self.on_canvas_release)
-        self.image_canvas.bind("<Button-3>", self.start_pan)  # Right-click
+        self.image_canvas.bind("<Button-3>", self.on_right_click)  # Right-click
         self.image_canvas.bind("<B3-Motion>", self.do_pan)   # Right-drag
         self.image_canvas.bind("<MouseWheel>", self.on_canvas_scroll)
         self.image_canvas.bind("<Button-4>", self.on_canvas_scroll)  # Linux
@@ -575,6 +589,7 @@ class HieroglyphAnnotatorGUI:
         self.display_y1 = y1
 
         self.draw_boxes()
+        self.draw_polygons()
     
     def start_pan(self, event):
         """Start panning with right-click"""
@@ -647,9 +662,29 @@ class HieroglyphAnnotatorGUI:
     
     def on_canvas_click(self, event):
         """Handle canvas click"""
-        self.start_x = event.x
-        self.start_y = event.y
-        self.drawing = True
+        if self.free_shape_mode:
+            # Add point to polygon
+            self.polygon_points.append((event.x, event.y))
+            print(f"Added point {len(self.polygon_points)}: ({event.x}, {event.y})")
+            
+            # Draw the point
+            self.image_canvas.create_oval(
+                event.x - 3, event.y - 3, event.x + 3, event.y + 3,
+                fill='#00FF00', outline='#00FF00', tags="polygon_point"
+            )
+            
+            # Draw line to previous point if exists
+            if len(self.polygon_points) > 1:
+                prev_x, prev_y = self.polygon_points[-2]
+                self.image_canvas.create_line(
+                    prev_x, prev_y, event.x, event.y,
+                    fill='#00FF00', width=2, tags="polygon_line"
+                )
+        else:
+            # Normal rectangle mode
+            self.start_x = event.x
+            self.start_y = event.y
+            self.drawing = True
     
     def on_canvas_drag(self, event):
         """Handle canvas drag"""
@@ -781,6 +816,8 @@ class HieroglyphAnnotatorGUI:
             self.clear_boxes()
         elif event.keysym == 's':
             self.save_current_symbol()
+        elif event.keysym == 'f':
+            self.toggle_free_shape()
         elif event.keysym == 'Left':
             self.pan_left()
         elif event.keysym == 'Right':
@@ -794,10 +831,90 @@ class HieroglyphAnnotatorGUI:
         elif event.keysym == 'minus':
             self.zoom_out()
     
+    def toggle_free_shape(self):
+        """Toggle free shape mode"""
+        self.free_shape_mode = not self.free_shape_mode
+        if self.free_shape_mode:
+            self.free_shape_button.config(text="🔷 Free Shape ON", style="Accent.TButton")
+            self.image_canvas.config(cursor="crosshair")
+            print("Free shape mode: ON - Left-click to add points, Right-click to complete")
+        else:
+            self.free_shape_button.config(text="🔷 Free Shape", style="TButton")
+            self.image_canvas.config(cursor="")
+            # Clear any incomplete polygon
+            self.polygon_points.clear()
+            self.image_canvas.delete("polygon_point")
+            self.image_canvas.delete("polygon_line")
+            print("Free shape mode: OFF")
+    
+    def on_right_click(self, event):
+        """Handle right-click"""
+        if self.free_shape_mode and len(self.polygon_points) > 2:
+            # Complete the polygon
+            self.complete_polygon()
+        else:
+            # Start panning
+            self.start_pan(event)
+    
+    def complete_polygon(self):
+        """Complete the current polygon"""
+        if len(self.polygon_points) > 2:
+            # Close the polygon by connecting to the first point
+            first_x, first_y = self.polygon_points[0]
+            last_x, last_y = self.polygon_points[-1]
+            
+            # Draw the closing line
+            self.image_canvas.create_line(
+                last_x, last_y, first_x, first_y,
+                fill='#00FF00', width=2, tags="polygon_line"
+            )
+            
+            # Add to completed polygons
+            self.polygons.append(self.polygon_points.copy())
+            self.polygon_points.clear()
+            
+            # Clear temporary drawing elements
+            self.image_canvas.delete("polygon_point")
+            self.image_canvas.delete("polygon_line")
+            
+            # Redraw to show completed polygon
+            self.display_image()
+            print(f"Completed polygon with {len(self.polygons[-1])} points")
+        else:
+            print("Need at least 3 points to complete a polygon")
+    
+    def draw_polygons(self):
+        """Draw all completed polygons"""
+        for i, polygon in enumerate(self.polygons):
+            if len(polygon) > 2:
+                # Draw the polygon outline
+                self.image_canvas.create_polygon(
+                    polygon, outline='#00FF00', width=2, fill="",
+                    tags=f"polygon_{i}"
+                )
+                
+                # Add polygon number
+                if polygon:
+                    x, y = polygon[0]
+                    self.image_canvas.create_text(
+                        x + 5, y + 5, text=f"P{i+1}", fill='#00FF00',
+                        font=('Arial', 12, 'bold'), tags=f"polygon_text_{i}"
+                    )
+    
+    def clear_boxes(self):
+        """Clear all bounding boxes and polygons"""
+        self.boxes.clear()
+        self.polygons.clear()
+        self.polygon_points.clear()
+        self.image_canvas.delete("polygon_point")
+        self.image_canvas.delete("polygon_line")
+        self.display_image()
+        print("All annotations cleared")
+    
     def save_current_symbol(self):
         """Save the currently selected symbol"""
-        if not self.boxes:
-            messagebox.showwarning("Warning", "No bounding boxes to save!")
+        if not self.boxes and not self.polygons:
+            messagebox.showwarning("Warning", "No annotations to save!")
             return
             
         # Get selected category
@@ -818,8 +935,10 @@ class HieroglyphAnnotatorGUI:
         symbol_description = self.SYMBOL_DESCRIPTIONS.get(selected_symbol, "Unknown")
         category_code = selected_symbol
         
-        # Save all boxes
+        # Save all boxes and polygons
         saved_count = 0
+        
+        # Save bounding boxes
         for i, (x, y, w, h) in enumerate(self.boxes):
             # Ensure coordinates are within image bounds
             img_h, img_w = self.current_image.shape[:2]
@@ -840,24 +959,66 @@ class HieroglyphAnnotatorGUI:
             symbol_img = symbol_img.resize(self.SAVE_SIZE, Image.Resampling.LANCZOS)
             
             # Save
-            filename = f"{os.path.splitext(self.image_files[self.current_image_index])[0]}_symbol_{i:03d}.png"
+            filename = f"{os.path.splitext(self.image_files[self.current_image_index])[0]}_box_{i:03d}.png"
             save_path = os.path.join(self.OUTPUT_DIR, category_code, filename)
             symbol_img.save(save_path)
-            print(f"Saved Box {i+1}: ({x1},{y1}) to ({x2},{y2}) - Size: {x2-x1}x{y2-y1} -> {save_path}")  # Debug
+            print(f"Saved Box {i+1}: ({x1},{y1}) to ({x2},{y2}) - Size: {x2-x1}x{y2-y1} -> {save_path}")
             saved_count += 1
         
-        messagebox.showinfo("Success", f"Saved {saved_count} symbol(s) to category '{selected_symbol} - {symbol_description}'")
-        self.clear_boxes()
+        # Save polygons
+        for i, polygon in enumerate(self.polygons):
+            if len(polygon) > 2:
+                # Get bounding box of the polygon
+                x_coords = [point[0] for point in polygon]
+                y_coords = [point[1] for point in polygon]
+                min_x = min(x_coords)
+                max_x = max(x_coords)
+                min_y = min(y_coords)
+                max_y = max(y_coords)
+                
+                # Convert canvas coordinates to image coordinates
+                img_min_x = int((min_x + self.offset_x) / self.zoom)
+                img_min_y = int((min_y + self.offset_y) / self.zoom)
+                img_max_x = int((max_x + self.offset_x) / self.zoom)
+                img_max_y = int((max_y + self.offset_y) / self.zoom)
+                
+                # Clip to image bounds
+                h, w = self.current_image.shape[:2]
+                img_min_x = max(0, min(w, img_min_x))
+                img_min_y = max(0, min(h, img_min_y))
+                img_max_x = max(0, min(w, img_max_x))
+                img_max_y = max(0, min(h, img_max_y))
+                
+                if img_max_x > img_min_x and img_max_y > img_min_y:
+                    # Extract the region from the original image
+                    symbol_crop = self.current_image[img_min_y:img_max_y, img_min_x:img_max_x]
+                    
+                    # Convert to PIL Image and resize to standard size
+                    symbol_img = Image.fromarray(symbol_crop)
+                    symbol_img = symbol_img.resize(self.SAVE_SIZE, Image.Resampling.LANCZOS)
+                    
+                    # Save
+                    filename = f"{os.path.splitext(self.image_files[self.current_image_index])[0]}_polygon_{i:03d}.png"
+                    save_path = os.path.join(self.OUTPUT_DIR, category_code, filename)
+                    symbol_img.save(save_path)
+                    print(f"Saved Polygon {i+1}: ({img_min_x},{img_min_y}) to ({img_max_x},{img_max_y}) - Size: {img_max_x-img_min_x}x{img_max_y-img_min_y} -> {save_path}")
+                    saved_count += 1
+        
+        if saved_count > 0:
+            messagebox.showinfo("Success", f"Saved {saved_count} annotation(s) to category '{selected_symbol} - {symbol_description}'")
+            self.clear_boxes()
+        else:
+            messagebox.showwarning("Warning", "No valid annotations to save!")
     
     def preview_boxes(self):
-        """Preview what will be saved from each bounding box"""
-        if not self.boxes:
-            messagebox.showwarning("Warning", "No bounding boxes to preview!")
+        """Preview what will be saved from each annotation"""
+        if not self.boxes and not self.polygons:
+            messagebox.showwarning("Warning", "No annotations to preview!")
             return
         
         # Create preview window
         preview_window = tk.Toplevel(self.root)
-        preview_window.title("📋 Box Preview")
+        preview_window.title("📋 Annotation Preview")
         preview_window.geometry("800x600")
         
         # Create scrollable frame
@@ -873,7 +1034,7 @@ class HieroglyphAnnotatorGUI:
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Show each box
+        # Show each bounding box
         for i, (x, y, w, h) in enumerate(self.boxes):
             # Ensure coordinates are within image bounds
             img_h, img_w = self.current_image.shape[:2]
@@ -906,6 +1067,52 @@ class HieroglyphAnnotatorGUI:
             img_label = ttk.Label(box_frame, image=photo)
             img_label.image = photo  # Keep a reference
             img_label.pack(anchor=tk.W)
+        
+        # Show each polygon
+        for i, polygon in enumerate(self.polygons):
+            if len(polygon) > 2:
+                # Get bounding box of the polygon
+                x_coords = [point[0] for point in polygon]
+                y_coords = [point[1] for point in polygon]
+                min_x = min(x_coords)
+                max_x = max(x_coords)
+                min_y = min(y_coords)
+                max_y = max(y_coords)
+                
+                # Convert canvas coordinates to image coordinates
+                img_min_x = int((min_x + self.offset_x) / self.zoom)
+                img_min_y = int((min_y + self.offset_y) / self.zoom)
+                img_max_x = int((max_x + self.offset_x) / self.zoom)
+                img_max_y = int((max_y + self.offset_y) / self.zoom)
+                
+                # Clip to image bounds
+                h, w = self.current_image.shape[:2]
+                img_min_x = max(0, min(w, img_min_x))
+                img_min_y = max(0, min(h, img_min_y))
+                img_max_x = max(0, min(w, img_max_x))
+                img_max_y = max(0, min(h, img_max_y))
+                
+                if img_max_x > img_min_x and img_max_y > img_min_y:
+                    # Extract symbol
+                    symbol_crop = self.current_image[img_min_y:img_max_y, img_min_x:img_max_x]
+                    symbol_img = Image.fromarray(symbol_crop)
+                    
+                    # Resize for preview (max 200px)
+                    max_size = 200
+                    symbol_img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                    
+                    # Convert to PhotoImage
+                    photo = ImageTk.PhotoImage(symbol_img)
+                    
+                    # Create frame for this preview
+                    poly_frame = ttk.Frame(scrollable_frame)
+                    poly_frame.pack(fill=tk.X, padx=10, pady=5)
+                    
+                    # Label and image
+                    ttk.Label(poly_frame, text=f"Polygon {i+1}: ({img_min_x},{img_min_y}) to ({img_max_x},{img_max_y}) - Size: {img_max_x-img_min_x}x{img_max_y-img_min_y} - Points: {len(polygon)}").pack(anchor=tk.W)
+                    img_label = ttk.Label(poly_frame, image=photo)
+                    img_label.image = photo  # Keep a reference
+                    img_label.pack(anchor=tk.W)
         
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -940,4 +1147,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
